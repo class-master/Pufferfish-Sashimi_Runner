@@ -1,0 +1,137 @@
+from kivy.app import App
+from kivy.uix.widget import Widget
+from kivy.uix.image import Image
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.properties import NumericProperty, ListProperty
+from kivy.core.audio import SoundLoader
+import random
+import os
+
+# ウィンドウサイズ設定
+Window.size = (800, 400)
+
+
+class Fugu(Image):
+    """プレイヤー（ふぐ刺身）"""
+    velocity_y = NumericProperty(0)
+    gravity = -0.5
+    jump_power = 15
+    on_ground = True
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.source = "assets/fugu.png"
+        self.size_hint = (None, None)
+        self.size = (100, 100)
+        self.pos = (100, 100)
+
+    def update(self):
+        # ジャンプと重力
+        self.y += self.velocity_y
+        self.velocity_y += self.gravity
+
+        if self.y <= 100:
+            self.y = 100
+            self.velocity_y = 0
+            self.on_ground = True
+
+    def jump(self):
+        if self.on_ground:
+            self.velocity_y = self.jump_power
+            self.on_ground = False
+
+
+class Obstacle(Image):
+    """障害物クラス"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.source = "assets/fugu.png"
+        self.size_hint = (None, None)
+        self.size = (80, 80)
+        self.pos = (Window.width, 100)
+
+    def update(self, dt):
+        self.x -= 5
+        if self.x < -100 and self.parent:
+            self.parent.remove_widget(self)
+
+
+class Game(Widget):
+    obstacles = ListProperty([])
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # プレイヤー追加
+        self.fugu = Fugu()
+        self.add_widget(self.fugu)
+
+        # --- 🎵 BGM設定 ---
+        # ⚠️ ファイルパスにバックスラッシュが含まれるので r""（raw文字列）を使う
+        bgm_path = r"C:\Users\kurag\Music\8-bit_Aggressive1.mp3"
+        if os.path.exists(bgm_path):
+            self.bgm = SoundLoader.load(bgm_path)
+            if self.bgm:
+                self.bgm.loop = True  # ループ再生ON
+                self.bgm.volume = 0.5  # 音量（0.0〜1.0）
+                self.bgm.play()
+        else:
+            print("⚠️ BGMファイルが見つかりません:", bgm_path)
+            self.bgm = None
+
+        # 更新スケジュール
+        Clock.schedule_interval(self.update, 1 / 120)
+        Clock.schedule_interval(self.spawn_obstacle, 2.0)
+
+    def update(self, dt):
+        self.fugu.update()
+
+        for obs in list(self.obstacles):
+            obs.update(dt)
+
+            # 衝突判定
+            if self.check_collision(self.fugu, obs):
+                print("ゲームオーバー🐡💥")
+
+                # --- 💥 ゲームオーバー効果音 ---
+                sfx_path = r"C:\Users\kurag\Music\meme.mp3"
+                if os.path.exists(sfx_path):
+                    sound = SoundLoader.load(sfx_path)
+                    if sound:
+                        sound.play()
+                else:
+                    print("⚠️ 効果音ファイルが見つかりません:", sfx_path)
+
+                # --- 🔇 BGM停止 ---
+                if self.bgm:
+                    self.bgm.stop()
+
+                # 更新停止
+                Clock.unschedule(self.update)
+                Clock.unschedule(self.spawn_obstacle)
+
+    def spawn_obstacle(self, dt):
+        obs = Obstacle()
+        self.obstacles.append(obs)
+        self.add_widget(obs)
+
+    def check_collision(self, fugu, obs):
+        return (
+            fugu.x < obs.x + obs.width and
+            fugu.x + fugu.width > obs.x and
+            fugu.y < obs.y + obs.height and
+            fugu.y + fugu.height > obs.y
+        )
+
+    def on_touch_down(self, touch):
+        self.fugu.jump()
+
+
+class FuguRunnerApp(App):
+    def build(self):
+        return Game()
+
+
+if __name__ == "__main__":
+    FuguRunnerApp().run()
