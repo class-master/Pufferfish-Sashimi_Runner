@@ -4,8 +4,12 @@ from kivy.uix.image import Image
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.properties import NumericProperty, ListProperty
+from kivy.core.audio import SoundLoader
 import random
+import os
+import time
 
+# ウィンドウサイズ設定
 Window.size = (800, 400)
 
 
@@ -13,7 +17,7 @@ class Fugu(Image):
     """プレイヤー（ふぐ刺身）"""
     velocity_y = NumericProperty(0)
     gravity = -0.5
-    jump_power = 100
+    jump_power = 15
     on_ground = True
 
     def __init__(self, **kwargs):
@@ -28,7 +32,7 @@ class Fugu(Image):
         self.y += self.velocity_y
         self.velocity_y += self.gravity
 
-        if self.y <= 100:  # 地面に着いたら
+        if self.y <= 100:
             self.y = 100
             self.velocity_y = 0
             self.on_ground = True
@@ -43,14 +47,14 @@ class Obstacle(Image):
     """障害物クラス"""
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.source = "assets/fugu.png"  # ふぐ刺身を障害物にも使う
+        self.source = "assets/fugu.png"
         self.size_hint = (None, None)
         self.size = (80, 80)
         self.pos = (Window.width, 100)
 
     def update(self, dt):
         self.x -= 5
-        if self.x < -100:
+        if self.x < -100 and self.parent:
             self.parent.remove_widget(self)
 
 
@@ -59,9 +63,27 @@ class Game(Widget):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+        # プレイヤー追加
         self.fugu = Fugu()
         self.add_widget(self.fugu)
-        Clock.schedule_interval(self.update, 1 / 60)
+
+
+        # --- 🎵 BGM設定 ---
+        # ⚠️ ファイルパスにバックスラッシュが含まれるので r""（raw文字列）を使う
+        bgm_path = r"C:\Users\kurag\Music\Download.mp4"
+        if os.path.exists(bgm_path):
+            self.bgm = SoundLoader.load(bgm_path)
+            if self.bgm:
+                self.bgm.loop = True  # ループ再生ON
+                self.bgm.volume = 0.5  # 音量（0.0〜1.0）
+                self.bgm.play()
+        else:
+            print("⚠️ BGMファイルが見つかりません:", bgm_path)
+            self.bgm = None
+
+        # 更新スケジュール
+        Clock.schedule_interval(self.update, 1 / 120)
         Clock.schedule_interval(self.spawn_obstacle, 2.0)
 
     def update(self, dt):
@@ -73,6 +95,33 @@ class Game(Widget):
             # 衝突判定
             if self.check_collision(self.fugu, obs):
                 print("ゲームオーバー🐡💥")
+                    # --- 🔇 BGM停止 ---
+                if self.bgm:
+                    self.bgm.stop()
+                    
+                # --- 💥 ゲームオーバー効果音 ---
+                sfx_path = r"C:\Users\kurag\Music\GB__.mp4"
+                if os.path.exists(sfx_path):
+                    sound = SoundLoader.load(sfx_path)
+                    if sound:
+                        sound.play()
+                else:
+                    print("⚠️ 効果音ファイルが見つかりません:", sfx_path)
+
+                time.sleep(2.5)
+                
+                sfx_path = r"C:\Users\kurag\Music\meme.mp4"
+                if os.path.exists(sfx_path):
+                    sound = SoundLoader.load(sfx_path)
+                    if sound:
+                        sound.play()
+                else:
+                    print("⚠️ 効果音ファイルが見つかりません:", sfx_path)
+
+
+                
+
+                # 更新停止
                 Clock.unschedule(self.update)
                 Clock.unschedule(self.spawn_obstacle)
 
