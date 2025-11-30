@@ -1,0 +1,8 @@
+# --- 🌄 背景画像追加 ---
+        self.background = Image(
+            source=os.path.join(base_path, "assets", "game.png"),
+            allow_stretch=True,
+            keep_ratio=False,
+            size=Window.size,
+            pos=(0, 0)
+        )
