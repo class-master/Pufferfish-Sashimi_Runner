@@ -5,9 +5,30 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.properties import NumericProperty, ListProperty
 from kivy.core.audio import SoundLoader
-import os
+from kivy.uix.label import Label
+from kivy.uix.screenmanager import ScreenManager, Screen, NoTransition
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.slider import Slider
+from kivy.uix.button import Button
+import os, random
 
-Window.size = (800, 400)
+# --- 画面サイズ ---
+Window.size = (1000, 600)
+
+# --- パスヘルパー ---
+def get_base_path():
+    return os.path.dirname(__file__) if '__file__' in globals() else os.getcwd()
+
+def assets_path(*parts):
+    return os.path.join(get_base_path(), "assets", *parts)
+
+def get_font_path():
+    p = assets_path("GenShinGothic-Regular.ttf")
+    return p if os.path.exists(p) else None
+
+def safe_image_source(path, default=""):
+    return path if os.path.exists(path) else default
+
 
 class Fugu(Image):
     velocity_y = NumericProperty(0)
@@ -17,7 +38,7 @@ class Fugu(Image):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.source = "assets/fugu.png"
+        self.source = safe_image_source(assets_path("fugu.png"))
         self.size_hint = (None, None)
         self.size = (100, 100)
         self.pos = (100, 100)
@@ -35,10 +56,11 @@ class Fugu(Image):
             self.velocity_y = self.jump_power
             self.on_ground = False
 
+
 class Obstacle(Image):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.source = "assets/bom.png"
+        self.source = safe_image_source(assets_path("bom.png"))
         self.size_hint = (None, None)
         self.size = (80, 80)
         self.pos = (Window.width, 100)
@@ -46,20 +68,26 @@ class Obstacle(Image):
     def update(self, dt):
         self.x -= 5
         if self.x < -100 and self.parent:
+            game = self.parent
+            if isinstance(game, Game):
+                game.score += 1
+                game.score_label.text = f"Score: {game.score}"
             self.parent.remove_widget(self)
+
 
 class Game(Widget):
     obstacles = ListProperty([])
 
-    def __init__(self, **kwargs):
+    def __init__(self, spawn_min=1.0, spawn_max=3.0, gravity=-0.5, **kwargs):
         super().__init__(**kwargs)
-
-        # 絶対パスをクラスプロパティに保持（どこでも使える）
-        self.base_path = os.path.dirname(__file__)
+        self.spawn_min = max(0.2, float(spawn_min))
+        self.spawn_max = max(self.spawn_min, float(spawn_max))
+        self.gravity = float(gravity)
+        self.font_path = get_font_path()
 
         # 背景
         self.background = Image(
-            source=os.path.join(self.base_path, "assets", "game.png"),
+            source=safe_image_source(assets_path("game.png")),
             allow_stretch=True,
             keep_ratio=False,
             size=Window.size,
@@ -69,63 +97,103 @@ class Game(Widget):
 
         # プレイヤー
         self.fugu = Fugu()
+        self.fugu.gravity = self.gravity
         self.add_widget(self.fugu)
 
+        # スコア表示
+        self.score = 0
+        self.score_label = Label(
+            text="Score: 0",
+            size_hint=(None, None),
+            pos=(Window.width - 200, Window.height - 50),
+            font_size=28,
+            font_name=self.font_path or "",
+            color=(1, 1, 1, 1)
+        )
+        self.add_widget(self.score_label)
+
         # BGM
-        bgm_path = os.path.join(self.base_path, "assets", "bgm.ogg")
-        self.bgm = SoundLoader.load(bgm_path)
+        self.bgm = self._load_sound(assets_path("bgm.ogg"), volume=0.5, loop=True)
         if self.bgm:
-            self.bgm.loop = True
-            self.bgm.volume = 0.5
-            self.bgm.play()
-        else:
-            print("❌ BGMファイルが見つかりません:", bgm_path)
+            try:
+                self.bgm.play()
+            except Exception:
+                self.bgm = None
 
         Clock.schedule_interval(self.update, 1 / 120.0)
-        Clock.schedule_interval(self.spawn_obstacle, 2.0)
+        self.schedule_next_obstacle()
+
+    def _load_sound(self, path, volume=1.0, loop=False):
+        if not os.path.exists(path):
+            return None
+        snd = SoundLoader.load(path)
+        if snd:
+            try:
+                snd.volume = volume
+                snd.loop = loop
+            except Exception:
+                pass
+        return snd
 
     def play_sfx(self, filename):
-        path = os.path.join(self.base_path, "assets", filename)
-        sound = SoundLoader.load(path)
-        if sound:
-            sound.play()
-        else:
-            print("❌ 効果音ロード失敗:", path)
+        snd = self._load_sound(assets_path(filename), volume=1.0, loop=False)
+        if snd:
+            try:
+                snd.play()
+            except Exception:
+                pass
+
+    def stop_all(self):
+        Clock.unschedule(self.update)
+        Clock.unschedule(self.spawn_obstacle)
+        if self.bgm:
+            try:
+                self.bgm.stop()
+            except Exception:
+                pass
+        for o in list(self.obstacles):
+            if o.parent:
+                o.parent.remove_widget(o)
+        self.obstacles.clear()
 
     def update(self, dt):
         self.fugu.update()
-
         for obs in list(self.obstacles):
             obs.update(dt)
             if self.check_collision(self.fugu, obs):
-                print("ゲームオーバー🐡💥")
-
                 # BGM停止
                 if self.bgm:
-                    self.bgm.stop()
-
-                # 即時のゲームオーバー効果音
+                    try:
+                        self.bgm.stop()
+                    except Exception:
+                        pass
+                # 効果音（順番）
                 self.play_sfx("GB__.ogg")
-
-                # 2.5秒後にメメ音を再生（Clockで遅延、sleepは使わない）
+                Clock.schedule_once(lambda _dt: self.play_sfx("叫ぶ.ogg"), 2.0)
                 Clock.schedule_once(lambda _dt: self.play_sfx("meme.ogg"), 2.5)
 
-                # ループ停止
-                Clock.unschedule(self.update)
-                Clock.unschedule(self.spawn_obstacle)
+                # ゲーム停止
+                self.stop_all()
 
-                # 障害物を掃除
-                for o in list(self.obstacles):
-                    if o.parent:
-                        o.parent.remove_widget(o)
-                self.obstacles.clear()
+                # 効果音終了直後にオプションへ戻す（黒画面回避）
+                Clock.schedule_once(self._return_to_options, 2.6)
+                break
 
-                break  # 一度の衝突で処理打ち切り
+    def _return_to_options(self, dt):
+        app = App.get_running_app()
+        if app and hasattr(app, "sm"):
+            # 既存の game 画面は残してもOKだが、毎回新設定で開始するなら削除してもよい
+            app.sm.current = "options"
 
     def spawn_obstacle(self, dt):
         obs = Obstacle()
         self.obstacles.append(obs)
         self.add_widget(obs)
+        self.schedule_next_obstacle()
+
+    def schedule_next_obstacle(self):
+        delay = random.uniform(self.spawn_min, self.spawn_max)
+        Clock.schedule_once(self.spawn_obstacle, delay)
 
     def check_collision(self, fugu, obs):
         return (
@@ -138,9 +206,117 @@ class Game(Widget):
     def on_touch_down(self, touch):
         self.fugu.jump()
 
+
+class OptionScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.font_path = get_font_path()
+        self.option_bgm = None
+
+        root = BoxLayout(orientation='vertical', padding=20, spacing=10)
+
+        root.add_widget(Label(text="敵の出現間隔 最小(秒)", font_size=30))
+        self.spawn_min_slider = Slider(min=0.2, max=5.0, value=1.0)
+        root.add_widget(self.spawn_min_slider)
+
+        root.add_widget(Label(text="敵の出現間隔 最大(秒)", font_size=30))   # ← 修正: ラベルが全部「最小」になっていたので直す
+        self.spawn_max_slider = Slider(min=0.5, max=8.0, value=3.0)
+        root.add_widget(self.spawn_max_slider)
+
+        root.add_widget(Label(text="重力", font_size=30))   # ← 修正: ラベル名を分かりやすく
+        self.gravity_slider = Slider(min=-2.0, max=-0.1, value=-0.5)
+        root.add_widget(self.gravity_slider)
+
+        start_btn = Button(
+            text="ゲーム開始",
+            size_hint=(1, None),
+            height=50,
+            font_size=30
+        )
+        start_btn.bind(on_press=self.start_game)   # ← ここが重要！
+        root.add_widget(start_btn)
+
+        self.add_widget(root)   
+
+        # BGMは画面入場時に再生する（戻り時も自動再生）
+        self.option_bgm_path = assets_path("Obgm.ogg")
+
+    def on_pre_enter(self, *args):
+        if os.path.exists(self.option_bgm_path):
+            self.option_bgm = SoundLoader.load(self.option_bgm_path)
+            if self.option_bgm:
+                try:
+                    self.option_bgm.loop = True
+                    self.option_bgm.volume = 0.5
+                    self.option_bgm.play()
+                except Exception:
+                    self.option_bgm = None
+
+    def on_leave(self, *args):
+        if self.option_bgm:
+            try:
+                self.option_bgm.stop()
+            except Exception:
+                pass
+            self.option_bgm = None
+
+    def start_game(self, *args):
+        # BGM停止（on_leaveでも止まるが念のため）
+        if self.option_bgm:
+            try:
+                self.option_bgm.stop()
+            except Exception:
+                pass
+            self.option_bgm = None
+
+        app = App.get_running_app()
+        sm = app.sm
+
+        # 既存のゲーム画面があれば削除（設定更新のため）
+        if sm.has_screen("game"):
+            old = sm.get_screen("game")
+            sm.remove_widget(old)
+
+        spawn_min = float(self.spawn_min_slider.value)
+        spawn_max = float(self.spawn_max_slider.value)
+        if spawn_min > spawn_max:
+            spawn_min, spawn_max = spawn_max, spawn_min
+        gravity = float(self.gravity_slider.value)
+
+        game_screen = GameScreen(name="game", spawn_min=spawn_min, spawn_max=spawn_max, gravity=gravity)
+        sm.add_widget(game_screen)
+        sm.current = "game"
+
+
+class GameScreen(Screen):
+    def __init__(self, spawn_min, spawn_max, gravity, **kwargs):
+        super().__init__(**kwargs)
+        self.game = Game(spawn_min=spawn_min, spawn_max=spawn_max, gravity=gravity)
+        self.add_widget(self.game)
+
+
 class FuguRunnerApp(App):
     def build(self):
-        return Game()
+        self.sm = ScreenManager(transition=NoTransition())
+        self.sm.add_widget(OptionScreen(name="options"))
+        self.sm.current = "options"
+        Window.bind(on_key_down=self.on_key_down)
+        return self.sm
+
+    def on_key_down(self, window, key, scancode, codepoint, modifiers):
+        if key == 27:  # ESC
+            # ゲームが存在すれば安全停止
+            if self.sm.has_screen("game"):
+                try:
+                    gs = self.sm.get_screen("game")
+                    if hasattr(gs, "game") and gs.game:
+                        gs.game.stop_all()
+                except Exception:
+                    pass
+            self.sm.current = "options"
+            return True
+        return False
+
 
 if __name__ == "__main__":
     FuguRunnerApp().run()
