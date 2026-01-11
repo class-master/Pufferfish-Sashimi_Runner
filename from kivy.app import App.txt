@@ -1,0 +1,944 @@
+from kivy.app import App
+from kivy.uix.widget import Widget
+from kivy.uix.image import Image
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.properties import NumericProperty, ListProperty, StringProperty
+from kivy.core.audio import SoundLoader
+from kivy.uix.label import Label
+from kivy.uix.screenmanager import ScreenManager, Screen, NoTransition
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.slider import Slider
+from kivy.uix.button import Button
+from kivy.graphics import Color, Rectangle
+from kivy.uix.video import Video 
+import os, random, sys
+from pathlib import Path
+from kivy.core.image import Image as CoreImage
+
+# --- 画面サイズ ---
+Window.size = (1000, 600)
+
+# --- パスヘルパー (PyInstaller対応) ---
+def get_base_path():
+    """アプリケーションのベースパスを取得する。"""
+    if getattr(sys, 'frozen', False):
+        return sys._MEIPASS
+    else:
+        return os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() and os.path.exists(os.path.dirname(__file__)) else os.getcwd()
+
+def assets_path(*parts):
+    return os.path.join(get_base_path(), "assets", *parts)
+
+# --- フォントヘルパー ---
+def get_font_path():
+    p = assets_path("GenShinGothic-Regular.ttf")
+    return p if os.path.exists(p) else ""
+
+def safe_asset(path):
+    """アセットの存在をチェックし、なければ空文字列を返す"""
+    return path if os.path.exists(path) else ""
+
+# ====================================================================
+# --- 動画背景クラス (VideoBackground) ---
+# ====================================================================
+class VideoBackground(Video):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.state = 'play'
+        self.options = {'loop': True}
+        self.allow_stretch = True
+        self.keep_ratio = False 
+        self.size_hint = (1, 1)
+        self.pos = (0, 0)
+        
+        if 'source' in kwargs:
+             self.source = kwargs['source']
+        
+    def play_video(self):
+        if self.source and self.state != 'play':
+            self.state = 'play'
+
+    def stop_video(self):
+        if self.state != 'stop':
+            self.state = 'stop'
+
+
+# ====================================================================
+# --- ゲームオブジェクト ---
+# ====================================================================
+# --- プレイヤー ---
+class Fugu(Image):
+    velocity_y = NumericProperty(0)
+    gravity = -0.3 
+    jump_power = 15 
+    on_ground = True
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.source = safe_asset(assets_path("fugu.png"))
+        self.size_hint = (None, None)
+        self.size = (130, 130) 
+        self.pos = (100, 100) 
+
+    def update(self, blocks):
+        self.y += self.velocity_y
+        self.velocity_y += self.gravity
+
+        # 地面 (Y=100) またはブロックとの衝突判定
+        landed = False
+        for block in blocks:
+            if (self.right > block.x and self.x < block.right and
+                self.y <= block.top and self.y > block.top - abs(self.velocity_y) and
+                self.velocity_y < 0):
+                self.y = block.top
+                self.velocity_y = 0
+                self.on_ground = True
+                landed = True
+                break
+            
+        if not landed and self.y <= 100:
+            self.y = 100
+            self.velocity_y = 0
+            self.on_ground = True
+            landed = True
+
+        if not landed:
+            self.on_ground = False
+
+    def jump(self):
+        if self.on_ground:
+            self.velocity_y = self.jump_power
+            self.on_ground = False
+
+    def check_hit(self, item):
+        is_colliding = (
+            self.x < item.right and self.right > item.x and
+            self.y < item.top and self.top > item.y
+        )
+        if not is_colliding:
+            return False
+
+        if isinstance(item, Obstacle):
+            return "GAME_OVER" 
+
+        elif isinstance(item, Boss):
+            if self.velocity_y < 0 and self.y + abs(self.velocity_y) >= item.top:
+                 self.velocity_y = self.jump_power 
+                 return "BOSS_HIT"
+            else:
+                 return "GAME_OVER" 
+            
+        return False
+
+
+# --- 障害物 ---
+class Obstacle(Image):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.source = safe_asset(assets_path("bom.png"))
+        self.size_hint = (None, None)
+        self.size = (100, 100) # ★修正: 80x80から100x100に拡大
+        self.pos = (Window.width, 100) 
+
+    def update(self, dt):
+        self.x -= 5 
+        if self.x < -100 and self.parent:
+            game = self.parent
+            if isinstance(game, Game):
+                if not game.is_boss_time and not game.boss_cleared:
+                    game.score += 1
+                    game.score_label.text = f"Score: {game.score}"
+            self.parent.remove_widget(self)
+
+# --- ボス ---
+class Boss(Image):
+    
+    hits_required = 1 
+    current_hits = 0 
+    move_speed = 4 
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.source = safe_asset(assets_path("boss.png")) 
+        self.size_hint = (None, None)
+        self.size = (150, 150)
+        self.pos = (Window.width, 100) 
+        self.allow_stretch = True
+        self.current_hits = 0 
+
+    def update(self, dt):
+        self.x -= self.move_speed 
+        
+        if self.x < -self.width:
+            if self.current_hits < self.hits_required:
+                return "FAILED" 
+            else:
+                return "CLEARED" 
+                
+        return False 
+
+
+# --- ブロック（足場） ---
+class Block(Widget): 
+    
+    texture = None
+
+    def __init__(self, block_width=150, **kwargs):
+        super().__init__(**kwargs)
+        
+        self.size_hint = (None, None)
+        self.width = block_width
+        self.height = 50 
+        self.y = 100 + random.randint(50, 150) 
+        self.x = Window.width
+
+        path = safe_asset(assets_path("block.png"))
+        if os.path.exists(path):
+            core_image = CoreImage(path)
+            self.texture = core_image.texture
+            self.texture.wrap = 'repeat'
+            
+        with self.canvas:
+            Color(1, 1, 1, 1)
+            self.rect = Rectangle(size=self.size, pos=self.pos)
+        
+        self.bind(pos=self._update_rect, size=self._update_rect)
+        self._update_rect(self, None)
+
+
+    def _update_rect(self, instance, value):
+        self.rect.pos = self.pos
+        self.rect.size = self.size
+        
+        if self.texture:
+            self.texture.uvsize = (self.width / self.texture.width, 1) 
+            self.rect.texture = self.texture
+
+
+    def update(self, dt):
+        self.x -= 5
+        if self.x < -self.width and self.parent:
+            self.parent.remove_widget(self)
+
+# --- ゲーム本体 ---
+class Game(Widget):
+    obstacles = ListProperty([])
+    blocks = ListProperty([])
+    bosses = ListProperty([])
+    
+    is_game_over = False
+    
+    BOSS_SCORE_THRESHOLD = 10
+    is_boss_time = False 
+
+    def __init__(self, spawn_min=1.0, spawn_max=3.0, gravity=-0.3, block_width=150, **kwargs):
+        super().__init__(**kwargs)
+        self.spawn_min = max(0.2, float(spawn_min))
+        self.spawn_max = max(self.spawn_min, float(spawn_max))
+        self.gravity = float(gravity) 
+        self.block_width = float(block_width)
+        self.font_path = get_font_path()
+        self.is_boss_time = False
+        self.boss_cleared = False 
+        self.score = 0
+        self.bgm = None
+        self.final_score_value = 0 
+        
+        # アプリケーションから音量設定を取得
+        app = App.get_running_app()
+        self.bgm_volume = app.settings.get('bgm_volume', 0.5)
+
+        # 背景
+        self.background = Image(
+            source=safe_asset(assets_path("game.png")),
+            allow_stretch=True,
+            keep_ratio=False,
+            size=Window.size,
+            pos=(0, 0)
+        )
+        self.add_widget(self.background)
+
+        # プレイヤー
+        self.fugu = Fugu()
+        self.add_widget(self.fugu)
+
+        # スコア
+        self.score_label = Label(
+            text="Score: 0",
+            size_hint=(None, None),
+            pos=(Window.width - 200, Window.height - 50),
+            font_size=28,
+            font_name=self.font_path,
+            color=(1, 1, 1, 1)
+        )
+        self.add_widget(self.score_label)
+        
+        # ボスライフ/ヒット表示ラベル
+        self.boss_hit_label = Label(
+            text="",
+            size_hint=(None, None),
+            pos=(Window.width / 2 - 100, Window.height - 50),
+            font_size=28,
+            font_name=self.font_path,
+            color=(1, 0, 0, 1)
+        )
+        self.add_widget(self.boss_hit_label)
+
+
+        # BGM
+        self.bgm = SoundLoader.load(assets_path("bgm.ogg")) if os.path.exists(assets_path("bgm.ogg")) else None
+        if self.bgm:
+            try:
+                # 設定された音量を適用
+                self.bgm.volume = self.bgm_volume 
+                self.bgm.loop = True
+                self.bgm.play()
+            except Exception:
+                self.bgm = None
+
+        Clock.schedule_interval(self.update, 1/60.0)
+        self.schedule_next_item()
+
+    def _load_sfx(self, filename, volume=0.5): 
+        # 効果音は一旦固定音量(0.5)でロード
+        path = assets_path(filename)
+        if not os.path.exists(path):
+            return None
+        snd = SoundLoader.load(path)
+        if snd:
+            try:
+                snd.volume = volume
+            except Exception:
+                pass
+        return snd
+
+    def play_sfx(self, filename):
+        snd = self._load_sfx(filename)
+        if snd:
+            try:
+                snd.play()
+            except Exception:
+                pass
+
+    def stop_all(self):
+        if self.is_game_over: return
+        self.is_game_over = True
+        Clock.unschedule(self.update)
+        Clock.unschedule(self.spawn_item)
+        
+        self.final_score_value = self.score 
+        
+        if self.bgm:
+            try:
+                self.bgm.stop()
+            except Exception:
+                pass
+        
+        for o in list(self.obstacles) + list(self.blocks) + list(self.bosses):
+            if o.parent:
+                o.parent.remove_widget(o)
+        self.obstacles.clear()
+        self.blocks.clear()
+        self.bosses.clear()
+        self.boss_hit_label.text = "" 
+
+
+    def update(self, dt):
+        if self.is_game_over: return
+
+        self.fugu.update(self.blocks)
+        
+        # 障害物とブロックの更新・衝突判定
+        for obs in list(self.obstacles):
+            obs.update(dt)
+            if self.fugu.check_hit(obs) == "GAME_OVER":
+                self.game_over_sequence()
+                return
+        
+        for block in list(self.blocks):
+            block.update(dt)
+
+        # ボスの更新・衝突判定
+        for boss in list(self.bosses):
+            
+            update_result = boss.update(dt) 
+            
+            if update_result == "FAILED":
+                self.game_over_sequence() 
+                if boss.parent: boss.parent.remove_widget(boss)
+                self.bosses.remove(boss)
+                return 
+            
+            elif update_result == "CLEARED":
+                self.game_clear_sequence() 
+                if boss.parent: boss.parent.remove_widget(boss)
+                self.bosses.remove(boss)
+                return 
+            
+            hit_result = self.fugu.check_hit(boss)
+            
+            if hit_result == "GAME_OVER":
+                self.game_over_sequence()
+                return
+            
+            elif hit_result == "BOSS_HIT":
+                self.play_sfx("hit.ogg")
+                boss.current_hits += 1
+                self.boss_hit_label.text = f"Boss HP: {boss.hits_required - boss.current_hits}"
+                
+                if boss.current_hits >= boss.hits_required:
+                    self.boss_hit_label.text = "BOSS DOWN!"
+                    
+
+        # ボス戦開始判定
+        if not self.is_boss_time and not self.boss_cleared and self.score >= self.BOSS_SCORE_THRESHOLD:
+            self.start_boss_sequence()
+
+
+    def game_over_sequence(self):
+        if self.is_game_over: return
+        self.stop_all()
+        self.play_sfx("GB__.ogg")
+        Clock.schedule_once(lambda _dt: self.play_sfx("叫ぶ.ogg"), 2.0)
+        Clock.schedule_once(lambda _dt: self.play_sfx("meme.ogg"), 2.5)
+        Clock.schedule_once(self._go_gameover, 2.6)
+
+    def _go_gameover(self, dt):
+        app = App.get_running_app()
+        if app and hasattr(app, "sm"):
+            if not app.sm.has_screen("gameover"):
+                app.sm.add_widget(GameOverScreen(name="gameover"))
+            app.sm.get_screen("gameover").on_pre_enter()
+            app.sm.current = "gameover"
+
+    def game_clear_sequence(self):
+        self.boss_cleared = True
+        self.stop_all()
+        self.play_sfx("clear.ogg")
+        self.score_label.text = f"クリア！ 最終スコア: {self.final_score_value}"
+        
+        Clock.schedule_once(self._go_gameover, 5.0) 
+    
+    
+    def start_boss_sequence(self):
+        self.is_boss_time = True
+        
+        Clock.unschedule(self.spawn_item)
+        
+        for o in list(self.obstacles) + list(self.blocks):
+            if o.parent:
+                o.parent.remove_widget(o)
+        self.obstacles.clear()
+        self.blocks.clear()
+        
+        if self.bgm:
+            try:
+                self.bgm.stop()
+            except Exception:
+                pass
+                
+        Clock.schedule_once(self._spawn_boss, 1.0) 
+        self.fugu.velocity_y = self.fugu.jump_power * 1.5
+
+
+    def _spawn_boss(self, dt):
+        if self.is_game_over: return
+        
+        if len(self.bosses) > 0 or self.boss_cleared: 
+            return
+
+        boss = Boss()
+        self.bosses.append(boss)
+        self.add_widget(boss)
+        
+        self.play_sfx("boss_appear.ogg")
+        
+        self.boss_hit_label.text = f"Boss HP: {boss.hits_required - boss.current_hits}" 
+
+
+    def spawn_item(self, dt):
+        if self.is_game_over: return
+        
+        if self.is_boss_time:
+            return
+        else:
+            if random.random() < 0.7: 
+                item = Obstacle()
+                self.obstacles.append(item)
+            else: 
+                item = Block(block_width=self.block_width)
+                self.blocks.append(item)
+            
+            self.add_widget(item)
+            self.schedule_next_item()
+
+
+    def schedule_next_item(self):
+        if self.is_game_over or self.is_boss_time: return
+        
+        delay = random.uniform(self.spawn_min, self.spawn_max)
+        Clock.schedule_once(self.spawn_item, delay)
+
+    def on_touch_down(self, touch):
+        if not self.is_game_over:
+            self.fugu.jump()
+
+# --- HomeScreen（ホーム画面） --- 
+class HomeScreen(Screen):
+    HOME_VIDEO_FILENAME = "kabe.mp4" 
+    HOME_IMAGE_FILENAME = "game.png" 
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        font_path = get_font_path()
+        self.menu_bgm = None 
+        self.menu_bgm_path = assets_path("bgm.ogg") 
+        
+        self.video_source = safe_asset(assets_path(self.HOME_VIDEO_FILENAME))
+        self.image_source = safe_asset(assets_path(self.HOME_IMAGE_FILENAME))
+        
+        self.video_bg = None
+        self.image_bg = None
+
+        if self.video_source:
+            self.video_bg = VideoBackground(source=self.video_source)
+            self.add_widget(self.video_bg)
+        else:
+            self.image_bg = Image(
+                source=self.image_source,
+                allow_stretch=True,
+                keep_ratio=False,
+                size=Window.size,
+                pos=(0, 0)
+            )
+            self.add_widget(self.image_bg)
+
+
+        root = BoxLayout(orientation='vertical', padding=50, spacing=30, size_hint=(0.8, 0.8), pos_hint={'center_x': 0.5, 'center_y': 0.5})
+        
+        with root.canvas.before:
+            Color(0, 0, 0, 0.5)
+            self.root_rect = Rectangle(size=root.size, pos=root.pos)
+        root.bind(size=self._update_root_rect, pos=self._update_root_rect)
+
+
+        root.add_widget(Label(
+            text="🐡 フグ・ランナー 🐡",
+            font_size=60,
+            font_name=font_path,
+            size_hint=(1, None),
+            height=100,
+            color=(1, 1, 1, 1)
+        ))
+
+        btn_start = Button(
+            text="ゲーム開始",
+            font_size=40,
+            font_name=font_path,
+            size_hint=(1, None),
+            height=80
+        )
+        btn_start.bind(on_press=self.start_game)
+        root.add_widget(btn_start)
+
+        btn_option = Button(
+            text="ゲーム設定 (オプション)",
+            font_size=40,
+            font_name=font_path,
+            size_hint=(1, None),
+            height=80
+        )
+        btn_option.bind(on_press=self.go_options)
+        root.add_widget(btn_option)
+
+        self.add_widget(root)
+
+    def _update_root_rect(self, instance, value):
+        self.root_rect.pos = instance.pos
+        self.root_rect.size = instance.size
+        
+    def on_pre_enter(self, *args):
+        if self.video_bg:
+            self.video_bg.play_video()
+            
+        # メニューBGMの音量をアプリ設定から取得して適用
+        app = App.get_running_app()
+        bgm_volume = app.settings.get('bgm_volume', 0.5)
+            
+        # BGM再生 (今回はゲームBGMと競合するため無効化を維持)
+        # if os.path.exists(self.menu_bgm_path):
+        #     if self.menu_bgm is None:
+        #         self.menu_bgm = SoundLoader.load(self.menu_bgm_path)
+        #     if self.menu_bgm:
+        #         try:
+        #             self.menu_bgm.loop = True
+        #             self.menu_bgm.volume = bgm_volume # 音量適用
+        #             if self.menu_bgm.state != 'play':
+        #                 self.menu_bgm.play()
+        #         except Exception:
+        #             self.menu_bgm = None
+            
+    def on_leave(self, *args):
+        if self.video_bg:
+            self.video_bg.stop_video()
+        
+    def start_game(self, *args):
+        app = App.get_running_app()
+        
+        # BGM停止（無効化しているが、念のため）
+        if self.menu_bgm: 
+            try:
+                self.menu_bgm.stop()
+            except Exception:
+                pass
+        
+        sm = app.sm
+        
+        option_screen = sm.get_screen("options")
+        # 設定値を取得 (音量を除く)
+        spawn_min, spawn_max, gravity, block_width = option_screen._get_validated_settings()
+        
+        if sm.has_screen("game"):
+            sm.remove_widget(sm.get_screen("game"))
+        game_screen = GameScreen(name="game", spawn_min=spawn_min, spawn_max=spawn_max, gravity=gravity, block_width=block_width)
+        sm.add_widget(game_screen)
+        sm.current = "game"
+
+    def go_options(self, *args):
+        app = App.get_running_app()
+        app.sm.current = "options"
+
+
+# --- GameOver画面 --- 
+class GameOverScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        font_path = get_font_path()
+        self.final_score = 0
+        self.is_cleared = False
+        
+        with self.canvas:
+            Color(0.2, 0.2, 0.2, 0.8)
+            self.rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_rect, size=self._update_rect)
+
+        root = BoxLayout(orientation='vertical', padding=20, spacing=20, size_hint=(0.6, 0.6), pos_hint={'center_x': 0.5, 'center_y': 0.5})
+
+        self.title_label = Label(
+            text="Game Over",
+            font_size=50,
+            font_name=font_path,
+            size_hint=(1, None),
+            height=80,
+            color=(1, 1, 1, 1)
+        )
+        root.add_widget(self.title_label)
+        
+        self.final_score_label = Label(
+            text="最終スコア: 0",
+            font_size=35,
+            font_name=font_path,
+            size_hint=(1, None),
+            height=60,
+            color=(1, 1, 1, 1)
+        )
+        root.add_widget(self.final_score_label)
+
+
+        btn_reset = Button(
+            text="リセットして再挑戦",
+            font_size=30,
+            font_name=font_path,
+            size_hint=(1, None),
+            height=60
+        )
+        btn_reset.bind(on_press=self.reset_game)
+        root.add_widget(btn_reset)
+
+        btn_option = Button(
+            text="ホームへ戻る",
+            font_size=30,
+            font_name=font_path,
+            size_hint=(1, None),
+            height=60
+        )
+        btn_option.bind(on_press=self.go_home)
+        root.add_widget(btn_option)
+
+        self.add_widget(root)
+
+    def _update_rect(self, *args):
+        self.rect.pos = self.pos
+        self.rect.size = self.size
+        
+    def on_pre_enter(self, *args):
+        app = App.get_running_app()
+        
+        if app.sm.has_screen("game"):
+            game_screen = app.sm.get_screen("game")
+            if hasattr(game_screen, 'game'):
+                self.final_score = game_screen.game.final_score_value 
+                self.is_cleared = game_screen.game.boss_cleared
+                
+                self.final_score_label.text = f"最終スコア: {self.final_score}"
+                
+                if self.is_cleared:
+                    self.title_label.text = "Game Clear! (ゲームクリア！)"
+                    self.title_label.color = (0, 1, 0, 1)
+                else:
+                    self.title_label.text = "Game Over (ゲームオーバー)"
+                    self.title_label.color = (1, 0, 0, 1)
+
+
+    def reset_game(self, *args):
+        app = App.get_running_app()
+        sm = app.sm
+        
+        option_screen = sm.get_screen("options")
+        spawn_min, spawn_max, gravity, block_width = option_screen._get_validated_settings()
+        
+        if sm.has_screen("game"):
+            sm.remove_widget(sm.get_screen("game"))
+        game_screen = GameScreen(name="game", spawn_min=spawn_min, spawn_max=spawn_max, gravity=gravity, block_width=block_width)
+        sm.add_widget(game_screen)
+        sm.current = "game"
+
+
+    def go_home(self, *args):
+        app = App.get_running_app()
+        app.sm.current = "home"
+
+# --- Option画面 --- 
+class OptionScreen(Screen):
+    HOME_VIDEO_FILENAME = "kabe.mp4" 
+    HOME_IMAGE_FILENAME = "game.png" 
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        font_path = get_font_path()
+        
+        self.video_source = safe_asset(assets_path(self.HOME_VIDEO_FILENAME))
+        self.image_source = safe_asset(assets_path(self.HOME_IMAGE_FILENAME))
+        
+        self.video_bg = None
+        self.image_bg = None
+        
+        if self.video_source:
+            self.video_bg = VideoBackground(source=self.video_source)
+            self.add_widget(self.video_bg)
+        else:
+            self.image_bg = Image(
+                source=self.image_source,
+                allow_stretch=True,
+                keep_ratio=False,
+                size=Window.size,
+                pos=(0, 0)
+            )
+            self.add_widget(self.image_bg)
+
+
+        root = BoxLayout(orientation='vertical', padding=50, spacing=20, size_hint=(0.8, 0.9), pos_hint={'center_x': 0.5, 'center_y': 0.5})
+        
+        with root.canvas.before:
+            Color(0, 0, 0, 0.5)
+            self.root_rect = Rectangle(size=root.size, pos=root.pos)
+        root.bind(size=self._update_root_rect, pos=self._update_root_rect)
+
+
+        root.add_widget(Label(text="⚙️ ゲーム設定", font_size=40, font_name=font_path, color=(1, 1, 1, 1)))
+        
+        # BGM音量調節機能
+        self.bgm_volume_label = Label(text=f"🔊 BGM音量: {0.5:.2f}", font_size=25, font_name=font_path, color=(1, 1, 1, 1))
+        root.add_widget(self.bgm_volume_label)
+        self.bgm_volume_slider = Slider(min=0.0, max=1.0, value=0.5, step=0.05)
+        self.bgm_volume_slider.bind(value=self.update_bgm_volume) 
+        root.add_widget(self.bgm_volume_slider)
+        
+        # 敵の出現間隔 最小
+        self.spawn_min_label = Label(text=f"👾 敵の出現間隔 最小(秒): {1.0:.1f}", font_size=25, font_name=font_path, color=(1, 1, 1, 1))
+        root.add_widget(self.spawn_min_label)
+        self.spawn_min_slider = Slider(min=0.2, max=5.0, value=1.0, step=0.1)
+        self.spawn_min_slider.bind(value=lambda instance, value: self._update_label_text(self.spawn_min_label, "👾 敵の出現間隔 最小(秒)", value))
+        root.add_widget(self.spawn_min_slider)
+
+        # 敵の出現間隔 最大
+        self.spawn_max_label = Label(text=f"👾 敵の出現間隔 最大(秒): {3.0:.1f}", font_size=25, font_name=font_path, color=(1, 1, 1, 1))
+        root.add_widget(self.spawn_max_label)
+        self.spawn_max_slider = Slider(min=0.5, max=8.0, value=3.0, step=0.1)
+        self.spawn_max_slider.bind(value=lambda instance, value: self._update_label_text(self.spawn_max_label, "👾 敵の出現間隔 最大(秒)", value))
+        root.add_widget(self.spawn_max_slider)
+
+        # 重力
+        self.gravity_label = Label(text=f"⬇️ 重力: {-0.3:.1f}", font_size=25, font_name=font_path, color=(1, 1, 1, 1))
+        root.add_widget(self.gravity_label)
+        self.gravity_slider = Slider(min=-2.0, max=-0.1, value=-0.3, step=0.1) 
+        self.gravity_slider.bind(value=lambda instance, value: self._update_label_text(self.gravity_label, "⬇️ 重力", value))
+        root.add_widget(self.gravity_slider)
+        
+        # ブロックの幅
+        self.block_width_label = Label(text=f"🧱 ブロックの幅 (ピクセル): {150:.0f}", font_size=25, font_name=font_path, color=(1, 1, 1, 1))
+        root.add_widget(self.block_width_label)
+        self.block_width_slider = Slider(min=50, max=300, value=150, step=10)
+        self.block_width_slider.bind(value=lambda instance, value: self._update_label_text(self.block_width_label, "🧱 ブロックの幅 (ピクセル)", value, is_int=True))
+        root.add_widget(self.block_width_slider)
+
+        start_btn = Button(
+            text="設定を保存してゲーム開始",
+            size_hint=(1, None),
+            height=60,
+            font_size=30,
+            font_name=font_path
+        )
+        start_btn.bind(on_press=self.start_game)
+        root.add_widget(start_btn)
+        
+        back_btn = Button(
+            text="設定を保存してホームへ戻る",
+            size_hint=(1, None),
+            height=60,
+            font_size=30,
+            font_name=font_path
+        )
+        back_btn.bind(on_press=self.go_home)
+        root.add_widget(back_btn)
+
+
+        self.add_widget(root)
+
+    def _update_root_rect(self, instance, value):
+        self.root_rect.pos = instance.pos
+        self.root_rect.size = instance.size
+
+    def _update_label_text(self, label, prefix, value, is_int=False):
+        format_str = ": {:.0f}" if is_int else ": {:.1f}"
+        if label == self.bgm_volume_label:
+             format_str = ": {:.2f}" 
+        label.text = prefix + format_str.format(value)
+        
+    def _get_validated_settings(self):
+        spawn_min = float(self.spawn_min_slider.value)
+        spawn_max = float(self.spawn_max_slider.value)
+        
+        if spawn_min > spawn_max:
+            self.spawn_min_slider.value = spawn_max
+            self.spawn_max_slider.value = spawn_min
+            spawn_min, spawn_max = self.spawn_min_slider.value, self.spawn_max_slider.value
+            
+        gravity = float(self.gravity_slider.value)
+        block_width = float(self.block_width_slider.value)
+        
+        return spawn_min, spawn_max, gravity, block_width
+
+    def update_bgm_volume(self, instance, value):
+        # ラベルを更新し、アプリ設定に保存し、ホーム画面のBGMに即時反映
+        self._update_label_text(self.bgm_volume_label, "🔊 BGM音量", value)
+        
+        app = App.get_running_app()
+        app.settings['bgm_volume'] = value
+        
+        # ホーム画面のBGMに即時反映
+        if app.sm.has_screen("home"):
+            home_screen = app.sm.get_screen("home")
+            if home_screen.menu_bgm:
+                try:
+                    home_screen.menu_bgm.volume = value
+                except Exception:
+                    pass
+        
+    def on_pre_enter(self, *args):
+        # スライダーとラベルにアプリ設定の音量をロード
+        app = App.get_running_app()
+        bgm_volume = app.settings.get('bgm_volume', 0.5)
+        self.bgm_volume_slider.value = bgm_volume
+        self._update_label_text(self.bgm_volume_label, "🔊 BGM音量", bgm_volume)
+
+        # 他の設定のロード
+        self._update_label_text(self.spawn_min_label, "👾 敵の出現間隔 最小(秒)", self.spawn_min_slider.value)
+        self._update_label_text(self.spawn_max_label, "👾 敵の出現間隔 最大(秒)", self.spawn_max_slider.value)
+        self._update_label_text(self.gravity_label, "⬇️ 重力", self.gravity_slider.value)
+        self._update_label_text(self.block_width_label, "🧱 ブロックの幅 (ピクセル)", self.block_width_slider.value, is_int=True)
+        
+        if self.video_bg:
+            self.video_bg.play_video()
+
+
+    def on_leave(self, *args):
+        if self.video_bg:
+            self.video_bg.stop_video()
+
+
+    def start_game(self, *args):
+        app = App.get_running_app()
+        
+        if app.sm.has_screen("home"):
+            home_screen = app.sm.get_screen("home")
+            if home_screen.menu_bgm: 
+                try:
+                    home_screen.menu_bgm.stop()
+                except Exception:
+                    pass
+
+        sm = app.sm
+        spawn_min, spawn_max, gravity, block_width = self._get_validated_settings()
+
+        if sm.has_screen("game"):
+            sm.remove_widget(sm.get_screen("game"))
+
+        game_screen = GameScreen(name="game", spawn_min=spawn_min, spawn_max=spawn_max, gravity=gravity, block_width=block_width)
+        sm.add_widget(game_screen)
+        sm.current = "game"
+        
+    def go_home(self, *args):
+        app = App.get_running_app()
+        self._get_validated_settings()
+        app.sm.current = "home"
+
+# --- Game画面ラッパー --- 
+class GameScreen(Screen):
+    def __init__(self, spawn_min, spawn_max, gravity, block_width, **kwargs):
+        super().__init__(**kwargs)
+        self.game = Game(spawn_min=spawn_min, spawn_max=spawn_max, gravity=gravity, block_width=block_width)
+        self.add_widget(self.game)
+
+# --- アプリ本体 --- 
+class FuguRunnerApp(App):
+    def build(self):
+        # アプリケーション全体の設定を保持するための辞書
+        self.settings = {'bgm_volume': 0.5} 
+        
+        self.sm = ScreenManager(transition=NoTransition())
+        self.sm.add_widget(OptionScreen(name="options")) 
+        self.sm.add_widget(HomeScreen(name="home"))
+        self.sm.add_widget(GameOverScreen(name="gameover"))
+
+        self.sm.current = "home"
+        Window.bind(on_key_down=self.on_key_down)
+        return self.sm
+
+    def on_key_down(self, window, key, scancode, codepoint, modifiers):
+        if self.sm.current == "game" and key == 32: # スペースキー
+            gs = self.sm.get_screen("game")
+            if hasattr(gs, "game") and gs.game and not gs.game.is_game_over:
+                gs.game.fugu.jump()
+                return True
+
+        if key == 27: # Escapeキー
+            if self.sm.current == "game":
+                try:
+                    gs = self.sm.get_screen("game")
+                    if hasattr(gs, "game") and gs.game and not gs.game.is_game_over:
+                        gs.game.stop_all() # ゲームを停止
+                except Exception:
+                    pass
+                
+                self.sm.get_screen("gameover").on_pre_enter()
+                self.sm.current = "gameover" 
+                return True
+            elif self.sm.current == "options" or self.sm.current == "gameover":
+                self.sm.current = "home"
+                return True
+        return False
+
+if __name__ == "__main__":
+    FuguRunnerApp().run()
