@@ -122,17 +122,20 @@ class AdminPanel(Screen):
 
     def _toggle_text(self, btn): btn.text = "無敵モード: ON" if btn.state == 'down' else "無敵モード: OFF"
     def force_m(self, *args):
-        gs = App.get_running_app().sm.get_screen("game")
-        if gs: gs.game.start_michael()
+        app = App.get_running_app()
+        if app.sm.has_screen("game"):
+            gs = app.sm.get_screen("game")
+            gs.game.start_michael()
         self.apply()
+
     def apply(self, *args):
-        app = App.get_running_app(); gs = app.sm.get_screen("game")
-        if gs:
+        app = App.get_running_app()
+        if app.sm.has_screen("game"):
+            gs = app.sm.get_screen("game")
             gs.game.set_score(int(self.si.text or 0))
             gs.game.fugu.invincible = (self.inv_btn.state == 'down')
             gs.game.resume_game()
-        app.sm.current = 'game'
-
+            app.sm.current = 'game'
 class Game(Widget):
     """ゲーム本体"""
     def __init__(self, settings, **kwargs):
