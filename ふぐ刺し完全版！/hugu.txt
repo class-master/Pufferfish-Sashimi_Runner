@@ -58,14 +58,12 @@ class Kirimi(Image):
         angle = math.atan2(target_pos[1]-start_pos[1], target_pos[0]-start_pos[0])
         self.vx = math.cos(angle) * 22
         self.vy = math.sin(angle) * 22
-
     def update(self):
         self.x += self.vx
         self.y += self.vy
 
 class Boss(Image):
     hp = NumericProperty(10)
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.source = get_path("boss.png")
@@ -73,7 +71,6 @@ class Boss(Image):
         self.size_hint = (None, None)
         self.x, self.y = Window.width, Window.height/2
         self.target_y = Window.height/2
-
     def update(self, dt):
         if self.x > Window.width - 450:
             self.x -= 4
@@ -119,6 +116,7 @@ class Fugu(Image):
     def jump(self):
         if self.y <= 115:
             self.vy = 18
+
 # ------------------------------------------
 # メインゲーム
 # ------------------------------------------
@@ -180,9 +178,7 @@ class Game(Widget):
 
         self.update_ev = Clock.schedule_interval(self.update, 1/60.0)
         self.spawn_ev = Clock.schedule_once(self.spawn_loop, self.spawn_interval)
-        self.michael_trigger = Clock.schedule_once(
-            lambda dt: self.start_michael(), 60.0
-        )
+        self.michael_trigger = Clock.schedule_once(lambda dt: self.start_michael(), 60.0)
 
     # ------------------------------------------
     # Video停止（完全破棄）
@@ -229,6 +225,7 @@ class Game(Widget):
                 keep_ratio=False
             )
             self.bg_container.add_widget(img)
+
     # ------------------------------------------
     # 入力
     # ------------------------------------------
@@ -335,6 +332,7 @@ class Game(Widget):
     def fade_out(self, dt):
         self.fade_color.a = min(1.0, self.fade_color.a + 0.015)
         return self.fade_color.a < 1.0
+
     # ------------------------------------------
     # Update
     # ------------------------------------------
@@ -359,9 +357,7 @@ class Game(Widget):
 
                 if self.boss.hp <= 0:
                     self.win()
-
-            # ★ Window.collide_point の代わりに画面外チェック
-            elif not (0 <= b.x <= Window.width and 0 <= b.y <= Window.height):
+            elif not Window.collide_point(*b.pos):
                 self.remove_widget(b)
                 self.bullets.remove(b)
 
@@ -426,6 +422,7 @@ class Game(Widget):
 
         self.bg_container.clear_widgets()
         self.clear_widgets()
+
 # ------------------------------------------
 # 各画面
 # ------------------------------------------
@@ -436,49 +433,27 @@ class TutorialScreen(Screen):
             Color(0,0,0,0.9)
             self.rect = Rectangle(size=Window.size)
 
-        layout = BoxLayout(orientation='vertical', padding=50, spacing=20)
-        layout.add_widget(Label(
-            text="【フグ刺身ランナー 操作解説】",
-            font_size=50,
-            font_name=get_font(),
-            color=ORANGE
-        ))
+        l = BoxLayout(orientation='vertical', padding=50, spacing=20)
+        l.add_widget(Label(text="【フグ刺身ランナー 操作解説】",
+                           font_size=50, font_name=get_font(), color=ORANGE))
+        l.add_widget(Label(text="・タップでジャンプ！\n・スコア10でフィーバー(動画背景)！\n・スコア31からボス戦(タップで攻撃)！\n・[K]キーで管理者パネルを開く！",
+                           font_size=30, font_name=get_font()))
 
-        layout.add_widget(Label(
-            text="・タップでジャンプ！\n"
-                 "・スコア10でフィーバー(動画背景)！\n"
-                 "・スコア31からボス戦(タップで攻撃)！\n"
-                 "・[K]キーで管理者パネルを開く！",
-            font_size=30,
-            font_name=get_font()
-        ))
+        b = Button(text="了解！", font_size=40, font_name=get_font(),
+                   size_hint=(0.3, 0.15), pos_hint={'center_x': 0.5})
+        b.bind(on_press=lambda x: setattr(self.manager, 'current', 'home'))
+        l.add_widget(b)
 
-        btn = Button(
-            text="了解！",
-            font_size=40,
-            font_name=get_font(),
-            size_hint=(0.3,0.15),
-            pos_hint={'center_x':0.5}
-        )
-        btn.bind(on_press=lambda x: setattr(self.manager, 'current', 'home'))
-        layout.add_widget(btn)
-
-        self.add_widget(layout)
-
+        self.add_widget(l)
 
 class HomeScreen(Screen):
     def on_enter(self):
         self.stop_home_video()
-        path = get_path("background.mp4")
-        if path:
+        p = get_path("background.mp4")
+        if p:
             self.hv = Video(
-                source=path,
-                state='play',
-                options={'eos': 'loop'},
-                allow_stretch=True,
-                keep_ratio=False,
-                size=Window.size
-            )
+                source=p, state='play', options={'eos': 'loop'},
+                allow_stretch=True, keep_ratio=False, size=Window.size)
             self.add_widget(self.hv, index=10)
 
     def on_leave(self):
@@ -499,83 +474,53 @@ class HomeScreen(Screen):
         super().__init__(**kwargs)
         self.diff = "NORMAL"
 
-        layout = BoxLayout(orientation='vertical', padding=60, spacing=15)
-        layout.add_widget(Label(
-            text="ふぐ刺身ランナー",
-            font_size=90,
-            font_name=get_font(),
-            color=ORANGE
-        ))
+        l = BoxLayout(orientation='vertical', padding=60, spacing=15)
+        l.add_widget(Label(text="ふぐ刺身ランナー",
+                           font_size=90, font_name=get_font(), color=ORANGE))
+        l.add_widget(Label(text="Created by あなた",
+                           font_size=25, font_name=get_font()))
 
-        layout.add_widget(Label(
-            text="Created by あなた",
-            font_size=25,
-            font_name=get_font()
-        ))
-        mode_layout = BoxLayout(size_hint_y=0.15, spacing=10)
+        ml = BoxLayout(size_hint_y=0.15, spacing=10)
         for m in ["EASY", "NORMAL", "HARD"]:
             btn = ToggleButton(
-                text=m,
-                group='mode',
-                state='down' if m == "NORMAL" else 'normal',
-                font_name=get_font()
-            )
-            btn.bind(on_press=lambda inst: setattr(self, 'diff', inst.text))
-            mode_layout.add_widget(btn)
+                text=m, group='mode',
+                state='down' if m=="NORMAL" else 'normal',
+                font_name=get_font())
+            btn.bind(on_press=lambda i: setattr(self, 'diff', i.text))
+            ml.add_widget(btn)
 
-        layout.add_widget(mode_layout)
+        l.add_widget(ml)
 
-        start_btn = Button(
-            text="START",
-            font_size=45,
-            font_name=get_font(),
-            size_hint=(0.5,0.25),
-            pos_hint={'center_x':0.5}
-        )
-        start_btn.bind(on_press=lambda x: self.start_game())
-        layout.add_widget(start_btn)
+        s = Button(text="START", font_size=45, font_name=get_font(),
+                   size_hint=(0.5,0.25), pos_hint={'center_x':0.5})
+        s.bind(on_press=lambda x: self.start_game())
+        l.add_widget(s)
 
-        settings_btn = Button(
-            text="詳細設定",
-            font_name=get_font(),
-            size_hint=(0.3,0.1),
-            pos_hint={'center_x':0.5}
-        )
-        settings_btn.bind(on_press=lambda x: setattr(self.manager, 'current', 'settings'))
-        layout.add_widget(settings_btn)
+        st = Button(text="詳細設定", font_name=get_font(),
+                    size_hint=(0.3,0.1), pos_hint={'center_x':0.5})
+        st.bind(on_press=lambda x: setattr(self.manager, 'current', 'settings'))
+        l.add_widget(st)
 
-        self.add_widget(layout)
+        self.add_widget(l)
 
     def start_game(self):
         App.get_running_app().selected_diff = self.diff
         self.manager.current = 'game_init'
 
-
 class SettingsScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        layout = BoxLayout(orientation='vertical', padding=100, spacing=30)
-        layout.add_widget(Label(
-            text="詳細設定",
-            font_size=60,
-            font_name=get_font(),
-            color=ORANGE
-        ))
+        l = BoxLayout(orientation='vertical', padding=100, spacing=30)
+        l.add_widget(Label(text="詳細設定", font_size=60, font_name=get_font(), color=ORANGE))
+        l.add_widget(Label(text="音量設定 (Slider)", font_name=get_font()))
+        l.add_widget(Slider(min=0, max=1, value=0.6))
 
-        layout.add_widget(Label(text="音量設定 (Slider)", font_name=get_font()))
-        layout.add_widget(Slider(min=0, max=1, value=0.6))
+        b = Button(text="戻る", font_name=get_font(),
+                   size_hint=(0.4, 0.2), pos_hint={'center_x':0.5})
+        b.bind(on_press=lambda x: setattr(self.manager, 'current', 'home'))
+        l.add_widget(b)
 
-        back_btn = Button(
-            text="戻る",
-            font_name=get_font(),
-            size_hint=(0.4,0.2),
-            pos_hint={'center_x':0.5}
-        )
-        back_btn.bind(on_press=lambda x: setattr(self.manager, 'current', 'home'))
-        layout.add_widget(back_btn)
-
-        self.add_widget(layout)
-
+        self.add_widget(l)
 
 class AdminPanel(Screen):
     def on_enter(self):
@@ -585,7 +530,7 @@ class AdminPanel(Screen):
             self.sc.value = gs.game.score
             self.info.text = f"Score: {gs.game.score}"
 
-    def apply(self, *args):
+    def apply(self, *a):
         gs = App.get_running_app().sm.get_screen('game_play')
         if gs:
             gs.game.set_score(int(self.sc.value))
@@ -598,39 +543,28 @@ class AdminPanel(Screen):
         with self.canvas.before:
             Color(0,0,0,0.95)
             self.rect = Rectangle(size=Window.size)
-        layout = BoxLayout(orientation='vertical', padding=60, spacing=30)
-        layout.add_widget(Label(
-            text="ADMIN PANEL (PAUSED)",
-            font_size=50,
-            font_name=get_font(),
-            color=ORANGE
-        ))
+
+        l = BoxLayout(orientation='vertical', padding=60, spacing=30)
+        l.add_widget(Label(text="ADMIN PANEL (PAUSED)",
+                           font_size=50, font_name=get_font(), color=ORANGE))
 
         self.info = Label(text="Score: 0", font_size=40, font_name=get_font())
-        layout.add_widget(self.info)
+        l.add_widget(self.info)
 
         self.sc = Slider(min=0, max=100, value=0, step=1)
-        self.sc.bind(value=lambda inst, v: setattr(self.info, "text", f"Score: {int(v)}"))
-        layout.add_widget(self.sc)
+        self.sc.bind(value=lambda i,v: setattr(self.info, 'text', f"Score: {int(v)}"))
+        l.add_widget(self.sc)
 
-        self.inv = ToggleButton(
-            text="INVINCIBLE",
-            font_size=40,
-            font_name=get_font()
-        )
-        layout.add_widget(self.inv)
+        self.inv = ToggleButton(text="INVINCIBLE",
+                                font_size=40, font_name=get_font())
+        l.add_widget(self.inv)
 
-        apply_btn = Button(
-            text="APPLY",
-            font_size=45,
-            font_name=get_font(),
-            background_color=(0,1,0,1)
-        )
-        apply_btn.bind(on_press=self.apply)
-        layout.add_widget(apply_btn)
+        b = Button(text="APPLY", font_size=45, font_name=get_font(),
+                   background_color=(0,1,0,1))
+        b.bind(on_press=self.apply)
+        l.add_widget(b)
 
-        self.add_widget(layout)
-
+        self.add_widget(l)
 
 class GameInitScreen(Screen):
     def on_enter(self):
@@ -638,41 +572,30 @@ class GameInitScreen(Screen):
         sm = self.manager
 
         if sm.has_screen('game_play'):
-            old_screen = sm.get_screen('game_play')
-            old_screen.game.cleanup()
-            sm.remove_widget(old_screen)
+            old = sm.get_screen('game_play')
+            old.game.cleanup()
+            sm.remove_widget(old)
 
-        new_screen = Screen(name='game_play')
-        new_screen.game = Game(diff_mode=app.selected_diff)
-        new_screen.add_widget(new_screen.game)
+        new = Screen(name='game_play')
+        new.game = Game(diff_mode=app.selected_diff)
+        new.add_widget(new.game)
 
-        sm.add_widget(new_screen)
+        sm.add_widget(new)
         sm.current = 'game_play'
-
 
 class GameOverScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        layout = BoxLayout(orientation='vertical', padding=150)
-        layout.add_widget(Label(
-            text="GAME OVER",
-            font_size=100,
-            font_name=get_font(),
-            color=(1,0,0,1)
-        ))
+        l = BoxLayout(orientation='vertical', padding=150)
+        l.add_widget(Label(text="GAME OVER",
+                           font_size=100, font_name=get_font(), color=(1,0,0,1)))
 
-        retry_btn = Button(
-            text="RETRY",
-            font_size=50,
-            font_name=get_font(),
-            size_hint=(0.4, 0.2),
-            pos_hint={'center_x': 0.5}
-        )
-        retry_btn.bind(on_press=lambda x: setattr(self.manager, 'current', 'home'))
-        layout.add_widget(retry_btn)
+        b = Button(text="RETRY", font_size=50, font_name=get_font(),
+                   size_hint=(0.4,0.2), pos_hint={'center_x':0.5})
+        b.bind(on_press=lambda x: setattr(self.manager, 'current', 'home'))
+        l.add_widget(b)
 
-        self.add_widget(layout)
-
+        self.add_widget(l)
 
 class FuguRunnerApp(App):
     def build(self):
@@ -686,15 +609,13 @@ class FuguRunnerApp(App):
         self.sm.add_widget(AdminPanel(name='admin'))
         self.sm.add_widget(GameOverScreen(name='gameover'))
 
-        Window.bind(on_key_down=self._on_key)
+        Window.bind(on_key_down=self._key)
 
         return self.sm
 
-    def _on_key(self, window, key, *args):
-        # K key (107)
-        if key == 107 and self.sm.current == 'game_play':
+    def _key(self, w, key, *a):
+        if key == 107 and self.sm.current == 'game_play':  # Kキー
             self.sm.current = 'admin'
-
 
 if __name__ == "__main__":
     FuguRunnerApp().run()
